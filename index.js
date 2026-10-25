@@ -1,10 +1,21 @@
 
+const http = require('http');
 const TelegramBot = require('node-telegram-bot-api');
 
 const token = process.env.BOT_TOKEN;
+const PORT = process.env.PORT || 10000;
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('JJ Files Bot is online!');
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('Web server running on port ' + PORT);
+});
 
 if (!token) {
-  console.error('BOT_TOKEN environment variable is missing!');
+  console.error('BOT_TOKEN is missing!');
   process.exit(1);
 }
 
@@ -14,32 +25,21 @@ bot.onText(/\/start(?:\s+(.+))?/, (msg, match) => {
   const chatId = msg.chat.id;
   const movieId = match && match[1] ? match[1] : null;
 
-  if (movieId) {
-    bot.sendMessage(
-      chatId,
-      'Welcome to JJ Movies!\nMovie ID: ' + movieId +
-      '\n\nMovie delivery setup is not connected yet.'
-    );
-    return;
-  }
+  const message = movieId
+    ? 'Welcome to JJ Movies!\nMovie ID: ' + movieId +
+      '\nMovie delivery is not connected yet.'
+    : 'Welcome to JJ Movies! 🎬\nJJ Files Bot is running.';
 
-  bot.sendMessage(
-    chatId,
-    'Welcome to JJ Movies! 🎬\n\n' +
-    'Bot is running.\n' +
-    'Open JJ Movies website to choose a movie.'
-  );
+  bot.sendMessage(chatId, message).catch(console.error);
 });
 
 bot.onText(/\/help/, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-    'JJ Movies Bot\n\n/start - Start the bot\n/help - Help'
-  );
+  bot.sendMessage(msg.chat.id, 'JJ Movies Bot\n/start - Start\n/help - Help')
+    .catch(console.error);
 });
 
 bot.on('polling_error', (error) => {
   console.error('Telegram polling error:', error.message);
 });
 
-console.log('JJ Files Bot is starting...');
+console.log('JJ Files Bot started!');
