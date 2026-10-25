@@ -9,6 +9,7 @@ var SUPABASE_KEY = process.env.SUPABASE_KEY;
 var PORT = process.env.PORT || 10000;
 
 var DELETE_AFTER_MS = 5 * 60 * 1000;
+var WEBSITE_URL = "https://geeras866-lab.github.io/JJ-Movies/";
 
 if (!token || !SUPABASE_URL || !SUPABASE_KEY) {
   console.error(
@@ -30,7 +31,7 @@ server.listen(PORT, "0.0.0.0", function () {
 
 var bot = new TelegramBot(token, { polling: true });
 
-// Read data from Supabase using the configured API key.
+// Read data from Supabase.
 function supabaseGet(path) {
   return new Promise(function (resolve, reject) {
     var requestUrl = new URL(SUPABASE_URL + path);
@@ -83,7 +84,7 @@ function supabaseGet(path) {
   });
 }
 
-// Convert a Telegram message link into a source chat ID and message ID.
+// Convert Telegram message link into source chat and message ID.
 function getTelegramMessage(link) {
   var parsed;
 
@@ -129,7 +130,20 @@ function getTelegramMessage(link) {
   throw new Error("Unsupported Telegram message link format");
 }
 
-// Send the selected movie version to the user.
+// Schedule deletion of a bot-sent message after five minutes.
+function scheduleMessageDeletion(chatId, messageId, label) {
+  setTimeout(function () {
+    bot.deleteMessage(chatId, messageId)
+      .then(function () {
+        console.log(label + " deleted after 5 minutes.");
+      })
+      .catch(function (error) {
+        console.error(label + " deletion failed:", error.message);
+      });
+  }, DELETE_AFTER_MS);
+}
+
+// Send the selected movie version.
 function sendMovieVersion(chatId, versionId) {
   if (!/^\d+$/.test(String(versionId))) {
     return bot.sendMessage(
@@ -182,33 +196,41 @@ function sendMovieVersion(chatId, versionId) {
             copiedMessage.message_id
           );
 
-          // Warn immediately after successful delivery.
-          bot.sendMessage(
+          // Send the warning message.
+          return bot.sendMessage(
             chatId,
             "⚠️ This file will be deleted from this chat in 5 minutes.\n\n" +
             "Please save or forward it before the time expires!"
-          ).catch(function (error) {
-            console.error("Warning message failed:", error.message);
-          });
+          ).then(function (warningMessage) {
 
-          // Delete the delivered file/message after five minutes.
-          setTimeout(function () {
-            bot.deleteMessage(
+            // Delete the delivered file after five minutes.
+            scheduleMessageDeletion(
               chatId,
-              copiedMessage.message_id
-            ).then(function () {
-              console.log(
-                "Delivered message deleted after 5 minutes."
-              );
-            }).catch(function (error) {
-              console.error(
-                "Could not delete delivered message:",
-                error.message
-              );
-            });
-          }, DELETE_AFTER_MS);
+              copiedMessage.message_id,
+              "Delivered file"
+            );
 
-          return copiedMessage;
+            // Delete the warning message after five minutes too.
+            scheduleMessageDeletion(
+              chatId,
+              warningMessage.message_id,
+              "Warning message"
+            );
+
+            return copiedMessage;
+
+          }).catch(function (error) {
+            console.error("Warning message failed:", error.message);
+
+            // Still schedule file deletion if warning fails.
+            scheduleMessageDeletion(
+              chatId,
+              copiedMessage.message_id,
+              "Delivered file"
+            );
+
+            return copiedMessage;
+          });
         });
       });
     })
@@ -220,12 +242,16 @@ function sendMovieVersion(chatId, versionId) {
         "Sorry bro, this file could not be delivered.\n" +
         "Please try again later or contact the JJ Movies admin."
       ).catch(function (sendError) {
-        console.error("Could not send error message:", sendError.message);
+        console.error(
+          "Could not send error message:",
+          sendError.message
+        );
       });
     });
 }
 
-// Website deep link: https://t.me/jj_files_bot?start=VERSION_ID
+// /start without payload shows welcome message and website link.
+// /start with version ID delivers the selected movie.
 bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
   var chatId = msg.chat.id;
   var payload = match && match[1] ? match[1].trim() : "";
@@ -233,29 +259,38 @@ bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
   if (!payload) {
     return bot.sendMessage(
       chatId,
-      "Welcome to JJ Movies! 🎬\n\n" +
-      "Open JJ Movies website and choose a movie quality to receive a file.\n\n" +
-      "⚠️ Delivered files are scheduled for deletion after 5 minutes. " +
-      "Please save or forward them before then."
+      "🎬 Welcome to JJ Movies!\n\n" +
+      "🍿 Open our website and choose a movie quality to receive the file.\n\n" +
+      "🌐 JJ Movies Website:\n" +
+      WEBSITE_URL + "\n\n" +
+      "⚠️ Delivered files and their warning messages are scheduled " +
+      "for deletion after 5 minutes. Please save or forward your file before then.\n\n" +
+      "❤️ Enjoy your movie!",
+      {
+        disable_web_page_preview: false
+      }
     );
   }
 
   sendMovieVersion(chatId, payload);
 });
 
+// Help command.
 bot.onText(/\/help/, function (msg) {
   bot.sendMessage(
     msg.chat.id,
-    "JJ Movies Bot 🎬\n\n" +
+    "🎬 JJ Movies Bot\n\n" +
+    "🌐 JJ Movies Website:\n" + WEBSITE_URL + "\n\n" +
     "/start - Start the bot\n" +
     "/help - Show help\n\n" +
-    "Files are scheduled for deletion 5 minutes after delivery. " +
-    "Please save or forward them in time."
+    "Files and their warning messages are scheduled for deletion " +
+    "5 minutes after delivery. Please save or forward your file in time."
   ).catch(function (error) {
     console.error("Help message failed:", error.message);
   });
 });
 
+// Telegram polling errors.
 bot.on("polling_error", function (error) {
   console.error("Telegram polling error:", error.message);
 });
