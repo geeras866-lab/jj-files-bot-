@@ -1,0 +1,13 @@
+
+{
+  "name": "jj-files-bot",
+  "version": "1.0.0",
+  "description": "JJ Movies Telegram bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
