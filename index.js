@@ -9,7 +9,7 @@ var SUPABASE_KEY = process.env.SUPABASE_KEY;
 var PORT = process.env.PORT || 10000;
 
 var DELETE_AFTER_MS = 5 * 60 * 1000;
-var WEBSITE_URL = "https://geeras866-lab.github.io/JJ-Movies/";
+var WEBSITE_URL = "https://jj-movies.pages.dev/";
 
 if (!token || !SUPABASE_URL || !SUPABASE_KEY) {
   console.error(
