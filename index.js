@@ -7,7 +7,7 @@ var SUPABASE_URL = process.env.SUPABASE_URL;
 var SUPABASE_KEY = process.env.SUPABASE_KEY;
 var PORT = process.env.PORT || 10000;
 
-var DELETE_AFTER_MS = 5 * 60 * 1000;
+var DELETE_AFTER_MS = 10 * 60 * 1000; // 10 minutes set chesamu
 var WEBSITE_URL = "https://jj-movies.pages.dev/";
 
 if (!token || !SUPABASE_URL || !SUPABASE_KEY) {
@@ -129,12 +129,12 @@ function getTelegramMessage(link) {
   throw new Error("Unsupported Telegram message link format");
 }
 
-// Schedule deletion of a bot-sent message after five minutes.
+// Schedule deletion of a bot-sent message after 10 minutes.
 function scheduleMessageDeletion(chatId, messageId, label) {
   setTimeout(function () {
     bot.deleteMessage(chatId, messageId)
       .then(function () {
-        console.log(label + " deleted after 5 minutes.");
+        console.log(label + " deleted after 10 minutes.");
       })
       .catch(function (error) {
         console.error(label + " deletion failed:", error.message);
@@ -142,7 +142,7 @@ function scheduleMessageDeletion(chatId, messageId, label) {
   }, DELETE_AFTER_MS);
 }
 
-// Send the selected movie version along with website button only on the file.
+// Send the selected movie version along with exact deletion time in warning message.
 function sendMovieVersion(chatId, versionId) {
   if (!/^\d+$/.test(String(versionId))) {
     return bot.sendMessage(
@@ -185,7 +185,6 @@ function sendMovieVersion(chatId, versionId) {
           " (" + version.quality + ") to user " + chatId
         );
 
-        // Options with website button ONLY for the copied movie file
         var fileOptions = {
           reply_markup: {
             inline_keyboard: [
@@ -195,6 +194,10 @@ function sendMovieVersion(chatId, versionId) {
             ]
           }
         };
+
+        // Calculate exact deletion time (Current Time + 10 Minutes)
+        var deleteTime = new Date(Date.now() + DELETE_AFTER_MS);
+        var timeString = deleteTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
         return bot.copyMessage(
           chatId,
@@ -207,11 +210,16 @@ function sendMovieVersion(chatId, versionId) {
             copiedMessage.message_id
           );
 
-          // Send the warning message WITHOUT the button (Clean look)
+          // Warning message with exact deletion time
+          var warningText = 
+            "⚠️ This file will be deleted from this chat in 10 minutes.\n" +
+            "⏰ Exact Deletion Time: *" + timeString + "*\n\n" +
+            "Please save or forward it before the time expires!";
+
           return bot.sendMessage(
             chatId,
-            "⚠️ This file will be deleted from this chat in 5 minutes.\n\n" +
-            "Please save or forward it before the time expires!"
+            warningText,
+            { parse_mode: "Markdown" }
           ).then(function (warningMessage) {
 
             scheduleMessageDeletion(
@@ -280,7 +288,7 @@ bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
       "🎬 Welcome to JJ Movies!\n\n" +
       "🍿 Open our website and choose a movie quality to receive the file.\n\n" +
       "⚠️ Delivered files and their warning messages are scheduled " +
-      "for deletion after 5 minutes. Please save or forward your file before then.\n\n" +
+      "for deletion after 10 minutes. Please save or forward your file before then.\n\n" +
       "❤️ Enjoy your movie!",
       startOptions
     );
@@ -297,7 +305,7 @@ bot.onText(/\/help/, function (msg) {
     "/start - Start the bot\n" +
     "/help - Show help\n\n" +
     "Files and their warning messages are scheduled for deletion " +
-    "5 minutes after delivery. Please save or forward your file in time.",
+    "10 minutes after delivery. Please save or forward your file in time.",
     {
       reply_markup: {
         inline_keyboard: [
@@ -317,4 +325,4 @@ bot.on("polling_error", function (error) {
   console.error("Telegram polling error:", error.message);
 });
 
-console.log("JJ Files Bot started cleanly with single button per file!");
+console.log("JJ Files Bot started with 10-minute exact deletion time!");
