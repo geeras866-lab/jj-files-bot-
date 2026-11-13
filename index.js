@@ -1,4 +1,3 @@
-
 var http = require("http");
 var https = require("https");
 var TelegramBot = require("node-telegram-bot-api");
@@ -143,7 +142,7 @@ function scheduleMessageDeletion(chatId, messageId, label) {
   }, DELETE_AFTER_MS);
 }
 
-// Send the selected movie version.
+// Send the selected movie version along with website button.
 function sendMovieVersion(chatId, versionId) {
   if (!/^\d+$/.test(String(versionId))) {
     return bot.sendMessage(
@@ -186,21 +185,34 @@ function sendMovieVersion(chatId, versionId) {
           " (" + version.quality + ") to user " + chatId
         );
 
+        // Options with website button for the copied file
+        var fileOptions = {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
+              ]
+            ]
+          }
+        };
+
         return bot.copyMessage(
           chatId,
           source.chatId,
-          source.messageId
+          source.messageId,
+          fileOptions
         ).then(function (copiedMessage) {
           console.log(
             "File delivered. Message ID: " +
             copiedMessage.message_id
           );
 
-          // Send the warning message.
+          // Send the warning message with the website button as well.
           return bot.sendMessage(
             chatId,
             "⚠️ This file will be deleted from this chat in 5 minutes.\n\n" +
-            "Please save or forward it before the time expires!"
+            "Please save or forward it before the time expires!",
+            fileOptions
           ).then(function (warningMessage) {
 
             // Delete the delivered file after five minutes.
@@ -250,41 +262,56 @@ function sendMovieVersion(chatId, versionId) {
     });
 }
 
-// /start without payload shows welcome message and website link.
-// /start with version ID delivers the selected movie.
+// /start without payload shows welcome message and website button.
+// /start with version ID delivers the selected movie with website button.
 bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
   var chatId = msg.chat.id;
   var payload = match && match[1] ? match[1].trim() : "";
+
+  var startOptions = {
+    disable_web_page_preview: false,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
+        ]
+      ]
+    }
+  };
 
   if (!payload) {
     return bot.sendMessage(
       chatId,
       "🎬 Welcome to JJ Movies!\n\n" +
       "🍿 Open our website and choose a movie quality to receive the file.\n\n" +
-      "🌐 JJ Movies Website:\n" +
-      WEBSITE_URL + "\n\n" +
       "⚠️ Delivered files and their warning messages are scheduled " +
       "for deletion after 5 minutes. Please save or forward your file before then.\n\n" +
       "❤️ Enjoy your movie!",
-      {
-        disable_web_page_preview: false
-      }
+      startOptions
     );
   }
 
   sendMovieVersion(chatId, payload);
 });
 
-// Help command.
+// Help command with website button.
 bot.onText(/\/help/, function (msg) {
   bot.sendMessage(
     msg.chat.id,
     "🎬 JJ Movies Bot\n\n" +
-    "🌐 JJ Movies Website:\n" + WEBSITE_URL + "\n\n" +
     "/start - Start the bot\n" +
     "/help - Show help\n\n" +
     "Files and their warning messages are scheduled for deletion " +
-    "5 minutes after delivery. Please save or forward your file in time."
+    "5 minutes after delivery. Please save or forward your file in time.",
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
+          ]
+        ]
+      }
+    }
   ).catch(function (error) {
     console.error("Help message failed:", error.message);
   });
@@ -295,4 +322,4 @@ bot.on("polling_error", function (error) {
   console.error("Telegram polling error:", error.message);
 });
 
-console.log("JJ Files Bot started!");
+console.log("JJ Files Bot started with website buttons!");
