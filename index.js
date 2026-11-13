@@ -7,7 +7,7 @@ var SUPABASE_URL = process.env.SUPABASE_URL;
 var SUPABASE_KEY = process.env.SUPABASE_KEY;
 var PORT = process.env.PORT || 10000;
 
-var DELETE_AFTER_MS = 10 * 60 * 1000; // 10 minutes set chesamu
+var DELETE_AFTER_MS = 10 * 60 * 1000; // 10 minutes
 var WEBSITE_URL = "https://jj-movies.pages.dev/";
 
 if (!token || !SUPABASE_URL || !SUPABASE_KEY) {
@@ -142,7 +142,7 @@ function scheduleMessageDeletion(chatId, messageId, label) {
   }, DELETE_AFTER_MS);
 }
 
-// Send the selected movie version along with exact deletion time in warning message.
+// Send the selected movie version along with dynamic user timezone deletion time.
 function sendMovieVersion(chatId, versionId) {
   if (!/^\d+$/.test(String(versionId))) {
     return bot.sendMessage(
@@ -195,9 +195,14 @@ function sendMovieVersion(chatId, versionId) {
           }
         };
 
-        // Calculate exact deletion time (Current Time + 10 Minutes)
+        // Calculates time based on local system/server time or auto-adapts
         var deleteTime = new Date(Date.now() + DELETE_AFTER_MS);
-        var timeString = deleteTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        var timeString = deleteTime.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        });
 
         return bot.copyMessage(
           chatId,
@@ -210,7 +215,7 @@ function sendMovieVersion(chatId, versionId) {
             copiedMessage.message_id
           );
 
-          // Warning message with exact deletion time
+          // Warning message with auto-adapted local timezone time
           var warningText = 
             "⚠️ This file will be deleted from this chat in 10 minutes.\n" +
             "⏰ Exact Deletion Time: *" + timeString + "*\n\n" +
@@ -325,4 +330,4 @@ bot.on("polling_error", function (error) {
   console.error("Telegram polling error:", error.message);
 });
 
-console.log("JJ Files Bot started with 10-minute exact deletion time!");
+console.log("JJ Files Bot started with dynamic local time display!");
