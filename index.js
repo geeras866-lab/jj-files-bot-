@@ -142,7 +142,7 @@ function scheduleMessageDeletion(chatId, messageId, label) {
   }, DELETE_AFTER_MS);
 }
 
-// Send the selected movie version along with website button.
+// Send the selected movie version along with website button only on the file.
 function sendMovieVersion(chatId, versionId) {
   if (!/^\d+$/.test(String(versionId))) {
     return bot.sendMessage(
@@ -185,7 +185,7 @@ function sendMovieVersion(chatId, versionId) {
           " (" + version.quality + ") to user " + chatId
         );
 
-        // Options with website button for the copied file
+        // Options with website button ONLY for the copied movie file
         var fileOptions = {
           reply_markup: {
             inline_keyboard: [
@@ -207,22 +207,19 @@ function sendMovieVersion(chatId, versionId) {
             copiedMessage.message_id
           );
 
-          // Send the warning message with the website button as well.
+          // Send the warning message WITHOUT the button (Clean look)
           return bot.sendMessage(
             chatId,
             "⚠️ This file will be deleted from this chat in 5 minutes.\n\n" +
-            "Please save or forward it before the time expires!",
-            fileOptions
+            "Please save or forward it before the time expires!"
           ).then(function (warningMessage) {
 
-            // Delete the delivered file after five minutes.
             scheduleMessageDeletion(
               chatId,
               copiedMessage.message_id,
               "Delivered file"
             );
 
-            // Delete the warning message after five minutes too.
             scheduleMessageDeletion(
               chatId,
               warningMessage.message_id,
@@ -234,7 +231,6 @@ function sendMovieVersion(chatId, versionId) {
           }).catch(function (error) {
             console.error("Warning message failed:", error.message);
 
-            // Still schedule file deletion if warning fails.
             scheduleMessageDeletion(
               chatId,
               copiedMessage.message_id,
@@ -262,8 +258,7 @@ function sendMovieVersion(chatId, versionId) {
     });
 }
 
-// /start without payload shows welcome message and website button.
-// /start with version ID delivers the selected movie with website button.
+// /start command
 bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
   var chatId = msg.chat.id;
   var payload = match && match[1] ? match[1].trim() : "";
@@ -294,7 +289,7 @@ bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
   sendMovieVersion(chatId, payload);
 });
 
-// Help command with website button.
+// Help command
 bot.onText(/\/help/, function (msg) {
   bot.sendMessage(
     msg.chat.id,
@@ -317,9 +312,9 @@ bot.onText(/\/help/, function (msg) {
   });
 });
 
-// Telegram polling errors.
+// Telegram polling errors
 bot.on("polling_error", function (error) {
   console.error("Telegram polling error:", error.message);
 });
 
-console.log("JJ Files Bot started with website buttons!");
+console.log("JJ Files Bot started cleanly with single button per file!");
