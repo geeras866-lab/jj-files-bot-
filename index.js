@@ -142,7 +142,7 @@ function scheduleMessageDeletion(chatId, messageId, label) {
   }, DELETE_AFTER_MS);
 }
 
-// Send the selected movie version along with dynamic user timezone deletion time.
+// Send the selected movie version along with clean 10 mins warning message.
 function sendMovieVersion(chatId, versionId) {
   if (!/^\d+$/.test(String(versionId))) {
     return bot.sendMessage(
@@ -195,15 +195,6 @@ function sendMovieVersion(chatId, versionId) {
           }
         };
 
-        // Calculates time based on local system/server time or auto-adapts
-        var deleteTime = new Date(Date.now() + DELETE_AFTER_MS);
-        var timeString = deleteTime.toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true
-        });
-
         return bot.copyMessage(
           chatId,
           source.chatId,
@@ -215,16 +206,14 @@ function sendMovieVersion(chatId, versionId) {
             copiedMessage.message_id
           );
 
-          // Warning message with auto-adapted local timezone time
+          // Clean warning message stating it will be deleted in 10 minutes
           var warningText = 
-            "⚠️ This file will be deleted from this chat in 10 minutes.\n" +
-            "⏰ Exact Deletion Time: *" + timeString + "*\n\n" +
+            "⚠️ This file will be deleted from this chat in 10 minutes.\n\n" +
             "Please save or forward it before the time expires!";
 
           return bot.sendMessage(
             chatId,
-            warningText,
-            { parse_mode: "Markdown" }
+            warningText
           ).then(function (warningMessage) {
 
             scheduleMessageDeletion(
@@ -330,4 +319,4 @@ bot.on("polling_error", function (error) {
   console.error("Telegram polling error:", error.message);
 });
 
-console.log("JJ Files Bot started with dynamic local time display!");
+console.log("JJ Files Bot started with 10 minutes deletion notice!");
