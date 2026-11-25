@@ -30,42 +30,38 @@ server.listen(PORT, "0.0.0.0", function () {
 
 var bot = new TelegramBot(token, { polling: true });
 
-// Read data from Supabase.
 function supabaseGet(path) {
   return new Promise(function (resolve, reject) {
     var requestUrl = new URL(SUPABASE_URL + path);
+    var headers = {
+      apikey: SUPABASE_KEY,
+      Accept: "application/json"
+    };
+
+    if (String(SUPABASE_KEY).startsWith("eyJ")) {
+      headers.Authorization = "Bearer " + SUPABASE_KEY;
+    }
 
     var options = {
       hostname: requestUrl.hostname,
       port: 443,
       path: requestUrl.pathname + requestUrl.search,
       method: "GET",
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: "Bearer " + SUPABASE_KEY,
-        Accept: "application/json"
-      }
+      headers: headers
     };
 
     var req = https.request(options, function (res) {
       var body = "";
-
       res.setEncoding("utf8");
-
       res.on("data", function (chunk) {
         body += chunk;
       });
-
       res.on("end", function () {
         if (res.statusCode < 200 || res.statusCode >= 300) {
           return reject(
-            new Error(
-              "Supabase request failed: HTTP " +
-              res.statusCode + " " + body
-            )
+            new Error("Supabase request failed: HTTP " + res.statusCode + " " + body)
           );
         }
-
         try {
           resolve(JSON.parse(body));
         } catch (error) {
@@ -83,23 +79,34 @@ function supabaseGet(path) {
   });
 }
 
-// Convert Telegram message link into source chat and message ID.
 function getTelegramMessage(link) {
   var parsed;
-
   try {
-    parsed = new URL(link);
+    parsed = new URL(String(link || "").trim());
   } catch (error) {
-    throw new Error("Invalid Telegram link");
+    throw new Error("Invalid Telegram link: " + link);
   }
 
   var host = parsed.hostname.toLowerCase();
-
-  if (host !== "t.me" && host !== "telegram.me") {
-    throw new Error("The source must be a Telegram message link");
+  if (host !== "t.me" && host !== "telegram.me" && host !== "www.t.me") {
+    throw new Error("Not a Telegram message link: " + link);
   }
 
   var parts = parsed.pathname.split("/").filter(Boolean);
+
+  // Forum/topic private link: https://t.me/c/3905680085/12/137
+  if (
+    parts.length >= 4 &&
+    parts[0] === "c" &&
+    /^\d+$/.test(parts[1]) &&
+    /^\d+$/.test(parts[2]) &&
+    /^\d+$/.test(parts[3])
+  ) {
+    return {
+      chatId: "-100" + parts[1],
+      messageId: Number(parts[3])
+    };
+  }
 
   // Private channel link: https://t.me/c/3905680085/137
   if (
@@ -126,10 +133,9 @@ function getTelegramMessage(link) {
     };
   }
 
-  throw new Error("Unsupported Telegram message link format");
+  throw new Error("Unsupported Telegram message link format: " + link);
 }
 
-// Schedule deletion of a bot-sent message after 10 minutes.
 function scheduleMessageDeletion(chatId, messageId, label) {
   setTimeout(function () {
     bot.deleteMessage(chatId, messageId)
@@ -142,9 +148,39 @@ function scheduleMessageDeletion(chatId, messageId, label) {
   }, DELETE_AFTER_MS);
 }
 
-// Send the selected movie version along with clean 10 mins warning message.
+function deliverMediaMessage(chatId, version, movieTitle) {
+  var fileOptions = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }]
+      ]
+    }
+  };
+
+  if (version.viewing_url && /^https?:\/\/(www\.)?(t|telegram)\.me\//i.test(String(version.viewing_url).trim())) {
+    var source = getTelegramMessage(version.viewing_url);
+    console.log(
+      "Copying message from " + source.chatId + " #" + source.messageId +
+      " for version " + version.id + " (" + movieTitle + ")"
+    );
+    return bot.copyMessage(chatId, source.chatId, source.messageId, fileOptions);
+  }
+
+  if (version.telegram_file_id && String(version.telegram_file_id).trim()) {
+    var fid = String(version.telegram_file_id).trim();
+    var caption = "🎬 " + movieTitle + (version.quality ? " (" + version.quality + ")" : "");
+    console.log("Sending file_id for version " + version.id + " (" + movieTitle + ")");
+    return bot.sendDocument(chatId, fid, Object.assign({ caption: caption }, fileOptions)).catch(function () {
+      return bot.sendVideo(chatId, fid, Object.assign({ caption: caption }, fileOptions));
+    });
+  }
+
+  throw new Error("No valid viewing_url or telegram_file_id on version " + version.id);
+}
+
 function sendMovieVersion(chatId, versionId) {
-  if (!/^\d+$/.test(String(versionId))) {
+  var cleanId = String(versionId || "").trim();
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cleanId)) {
     return bot.sendMessage(
       chatId,
       "Invalid movie link. Please open the quality button on JJ Movies again."
@@ -152,14 +188,14 @@ function sendMovieVersion(chatId, versionId) {
   }
 
   var versionPath =
-    "/rest/v1/movie_versions?select=id,movie_id,quality,audio_language,viewing_url" +
-    "&id=eq." + encodeURIComponent(versionId) +
+    "/rest/v1/movie_versions?select=id,movie_id,quality,audio_language,viewing_url,telegram_file_id" +
+    "&id=eq." + encodeURIComponent(cleanId) +
     "&limit=1";
 
   return supabaseGet(versionPath)
     .then(function (versions) {
-      if (!versions.length) {
-        throw new Error("Movie version not found");
+      if (!versions || !versions.length) {
+        throw new Error("Movie version not found for id=" + cleanId);
       }
 
       var version = versions[0];
@@ -170,76 +206,25 @@ function sendMovieVersion(chatId, versionId) {
         "&is_published=eq.true&limit=1";
 
       return supabaseGet(moviePath).then(function (movieRows) {
-        if (!movieRows.length) {
-          throw new Error("Movie is not published");
+        if (!movieRows || !movieRows.length) {
+          throw new Error("Movie not found or unpublished for movie_id=" + version.movie_id);
         }
 
-        if (!version.viewing_url) {
-          throw new Error("Telegram source link is missing");
-        }
+        return deliverMediaMessage(chatId, version, movieRows[0].title).then(function (deliveredMessage) {
+          console.log("File delivered. Message ID: " + deliveredMessage.message_id);
 
-        var source = getTelegramMessage(version.viewing_url);
-
-        console.log(
-          "Sending version " + version.id +
-          " (" + version.quality + ") to user " + chatId
-        );
-
-        var fileOptions = {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
-              ]
-            ]
-          }
-        };
-
-        return bot.copyMessage(
-          chatId,
-          source.chatId,
-          source.messageId,
-          fileOptions
-        ).then(function (copiedMessage) {
-          console.log(
-            "File delivered. Message ID: " +
-            copiedMessage.message_id
-          );
-
-          // Clean warning message stating it will be deleted in 10 minutes
-          var warningText = 
+          var warningText =
             "⚠️ This file will be deleted from this chat in 10 minutes.\n\n" +
             "Please save or forward it before the time expires!";
 
-          return bot.sendMessage(
-            chatId,
-            warningText
-          ).then(function (warningMessage) {
-
-            scheduleMessageDeletion(
-              chatId,
-              copiedMessage.message_id,
-              "Delivered file"
-            );
-
-            scheduleMessageDeletion(
-              chatId,
-              warningMessage.message_id,
-              "Warning message"
-            );
-
-            return copiedMessage;
-
+          return bot.sendMessage(chatId, warningText).then(function (warningMessage) {
+            scheduleMessageDeletion(chatId, deliveredMessage.message_id, "Delivered file");
+            scheduleMessageDeletion(chatId, warningMessage.message_id, "Warning message");
+            return deliveredMessage;
           }).catch(function (error) {
             console.error("Warning message failed:", error.message);
-
-            scheduleMessageDeletion(
-              chatId,
-              copiedMessage.message_id,
-              "Delivered file"
-            );
-
-            return copiedMessage;
+            scheduleMessageDeletion(chatId, deliveredMessage.message_id, "Delivered file");
+            return deliveredMessage;
           });
         });
       });
@@ -252,15 +237,11 @@ function sendMovieVersion(chatId, versionId) {
         "Sorry bro, this file could not be delivered.\n" +
         "Please try again later or contact the JJ Movies admin."
       ).catch(function (sendError) {
-        console.error(
-          "Could not send error message:",
-          sendError.message
-        );
+        console.error("Could not send error message:", sendError.message);
       });
     });
 }
 
-// /start command
 bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
   var chatId = msg.chat.id;
   var payload = match && match[1] ? match[1].trim() : "";
@@ -269,9 +250,7 @@ bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
     disable_web_page_preview: false,
     reply_markup: {
       inline_keyboard: [
-        [
-          { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
-        ]
+        [{ text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }]
       ]
     }
   };
@@ -291,7 +270,6 @@ bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
   sendMovieVersion(chatId, payload);
 });
 
-// Help command
 bot.onText(/\/help/, function (msg) {
   bot.sendMessage(
     msg.chat.id,
@@ -303,9 +281,7 @@ bot.onText(/\/help/, function (msg) {
     {
       reply_markup: {
         inline_keyboard: [
-          [
-            { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
-          ]
+          [{ text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }]
         ]
       }
     }
@@ -314,7 +290,6 @@ bot.onText(/\/help/, function (msg) {
   });
 });
 
-// Telegram polling errors
 bot.on("polling_error", function (error) {
   console.error("Telegram polling error:", error.message);
 });
