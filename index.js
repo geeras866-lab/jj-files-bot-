@@ -1,339 +1,192 @@
-var http = require("http");
-var https = require("https");
-var TelegramBot = require("node-telegram-bot-api");
+const fs = require("fs");
+const path = require("path");
+const https = require("https");
 
-var token = process.env.BOT_TOKEN;
-var SUPABASE_URL = process.env.SUPABASE_URL;
-var SUPABASE_KEY = process.env.SUPABASE_KEY;
-var PORT = process.env.PORT || 10000;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_KEY;
+const CHANNEL_ID = "3905680085";
+const EXPORT_DIR = path.join(__dirname, "export");
 
-var DELETE_AFTER_MS = 10 * 60 * 1000; // 10 minutes
-var WEBSITE_URL = "https://jj-movies.pages.dev/";
-
-if (!token || !SUPABASE_URL || !SUPABASE_KEY) {
-  console.error(
-    "Missing environment variable: BOT_TOKEN, SUPABASE_URL, or SUPABASE_KEY"
-  );
-  process.exit(1);
+function norm(str) {
+  return String(str || "")
+    .toLowerCase()
+    .replace(/&amp;/g, "and")
+    .replace(/&apos;|&#39;|'/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
-SUPABASE_URL = SUPABASE_URL.replace(/\/+$/, "");
+function parseSizeMBFromText(text) {
+  const s = String(text || "");
+  const gb = s.match(/(\d+(?:\.\d+)?)\s*gb/i);
+  if (gb) return parseFloat(gb[1]) * 1024;
+  const mb = s.match(/(\d+(?:\.\d+)?)\s*mb/i);
+  if (mb) return parseFloat(mb[1]);
+  return null;
+}
 
-var server = http.createServer(function (req, res) {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("JJ Files Bot is online!");
-});
+function extractRes(text) {
+  const m = String(text || "").match(/\b(2160p|4k|1080p|720p|576p|480p|360p|240p)\b/i);
+  return m ? m[1].toLowerCase().replace("4k", "2160p") : "";
+}
 
-server.listen(PORT, "0.0.0.0", function () {
-  console.log("Web server running on port " + PORT);
-});
-
-var bot = new TelegramBot(token, { polling: true });
-
-// Read data from Supabase.
-function supabaseGet(path) {
-  return new Promise(function (resolve, reject) {
-    var requestUrl = new URL(SUPABASE_URL + path);
-    var headers = {
-      apikey: SUPABASE_KEY,
+function supabaseReq(method, apiPath, bodyObj) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(SUPABASE_URL.replace(/\/+$/, "") + apiPath);
+    const payload = bodyObj ? JSON.stringify(bodyObj) : null;
+    const headers = {
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: "Bearer " + SUPABASE_SERVICE_KEY,
+      "Content-Type": "application/json",
       Accept: "application/json"
     };
+    if (payload) headers["Content-Length"] = Buffer.byteLength(payload);
 
-    if (String(SUPABASE_KEY).startsWith("eyJ")) {
-      headers.Authorization = "Bearer " + SUPABASE_KEY;
-    }
-
-    var options = {
-      hostname: requestUrl.hostname,
-      port: 443,
-      path: requestUrl.pathname + requestUrl.search,
-      method: "GET",
-      headers: headers
-    };
-
-    var req = https.request(options, function (res) {
-      var body = "";
-
-      res.setEncoding("utf8");
-
-      res.on("data", function (chunk) {
-        body += chunk;
-      });
-
-      res.on("end", function () {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(
-            new Error(
-              "Supabase request failed: HTTP " +
-              res.statusCode + " " + body
-            )
-          );
-        }
-
-        try {
-          resolve(JSON.parse(body));
-        } catch (error) {
-          reject(new Error("Invalid JSON response from Supabase"));
-        }
-      });
-    });
-
-    req.setTimeout(15000, function () {
-      req.destroy(new Error("Supabase request timed out"));
-    });
-
+    const req = https.request(
+      { hostname: u.hostname, port: 443, path: u.pathname + u.search, method, headers },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            return reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          }
+          resolve(data ? JSON.parse(data) : null);
+        });
+      }
+    );
     req.on("error", reject);
+    if (payload) req.write(payload);
     req.end();
   });
 }
 
-// Convert Telegram message link into source chat and message ID.
-function getTelegramMessage(link) {
-  var parsed;
+function parseHtmlFiles() {
+  if (!fs.existsSync(EXPORT_DIR)) throw new Error("export/ folder kanipinchaledu!");
+  const files = fs.readdirSync(EXPORT_DIR).filter((f) => /^messages\d*\.html$/i.test(f));
+  if (!files.length) throw new Error("export/ folder lo messages.html files levu!");
 
-  try {
-    parsed = new URL(String(link || "").trim());
-  } catch (error) {
-    throw new Error("Invalid Telegram link: " + link);
-  }
+  const mediaList = [];
+  const validMsgIds = new Set();
 
-  var host = parsed.hostname.toLowerCase();
+  for (const file of files) {
+    const html = fs.readFileSync(path.join(EXPORT_DIR, file), "utf8");
+    const blocks = html.split('<div class="message ');
+    for (const b of blocks) {
+      const idMatch = b.match(/id="message(\d+)"/);
+      if (!idMatch) continue;
+      const msgId = Number(idMatch[1]);
+      validMsgIds.add(msgId);
 
-  if (host !== "t.me" && host !== "telegram.me" && host !== "www.t.me") {
-    throw new Error("Not a Telegram message link: " + link);
-  }
+      if (!b.includes("media_file") && !b.includes("media_video")) continue;
 
-  var parts = parsed.pathname.split("/").filter(Boolean);
+      const titleMatch = b.match(/<div class="title bold">\s*([\s\S]*?)\s*<\/div>/);
+      const statusMatch = b.match(/<div class="status details">\s*([\s\S]*?)\s*<\/div>/);
+      const textMatch = b.match(/<div class="text">\s*([\s\S]*?)\s*<\/div>/);
 
-  // Forum/topic private link: https://t.me/c/3905680085/12/137
-  if (
-    parts.length >= 4 &&
-    parts[0] === "c" &&
-    /^\d+$/.test(parts[1]) &&
-    /^\d+$/.test(parts[2]) &&
-    /^\d+$/.test(parts[3])
-  ) {
-    return {
-      chatId: "-100" + parts[1],
-      messageId: Number(parts[3])
-    };
-  }
+      const fileName = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, " ").trim() : "";
+      const status = statusMatch ? statusMatch[1].replace(/<[^>]+>/g, " ").trim() : "";
+      const caption = textMatch ? textMatch[1].replace(/<[^>]+>/g, " ").trim() : "";
 
-  // Private channel link: https://t.me/c/3905680085/137
-  if (
-    parts.length >= 3 &&
-    parts[0] === "c" &&
-    /^\d+$/.test(parts[1]) &&
-    /^\d+$/.test(parts[2])
-  ) {
-    return {
-      chatId: "-100" + parts[1],
-      messageId: Number(parts[2])
-    };
-  }
+      const sizeMB = parseSizeMBFromText(status) || parseSizeMBFromText(caption) || 0;
+      if (sizeMB < 50) continue;
 
-  // Public channel link: https://t.me/channelname/137
-  if (
-    parts.length >= 2 &&
-    /^[A-Za-z0-9_]+$/.test(parts[0]) &&
-    /^\d+$/.test(parts[1])
-  ) {
-    return {
-      chatId: "@" + parts[0],
-      messageId: Number(parts[1])
-    };
-  }
-
-  throw new Error("Unsupported Telegram message link format: " + link);
-}
-
-// Schedule deletion of a bot-sent message after 10 minutes.
-function scheduleMessageDeletion(chatId, messageId, label) {
-  setTimeout(function () {
-    bot.deleteMessage(chatId, messageId)
-      .then(function () {
-        console.log(label + " deleted after 10 minutes.");
-      })
-      .catch(function (error) {
-        console.error(label + " deletion failed:", error.message);
+      const combined = `${fileName} ${caption}`;
+      mediaList.push({
+        msgId,
+        sizeMB,
+        normText: norm(combined),
+        res: extractRes(combined),
+        isHevc: /hevc|x265|h\.?265/i.test(combined)
       });
-  }, DELETE_AFTER_MS);
-}
-
-// Deliver file from Telegram viewing_url.
-function deliverMediaMessage(chatId, version, movieTitle) {
-  var fileOptions = {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
-        ]
-      ]
     }
-  };
-
-  if (
-    version.viewing_url &&
-    /^https?:\/\/(www\.)?(t|telegram)\.me\//i.test(String(version.viewing_url).trim())
-  ) {
-    var source = getTelegramMessage(version.viewing_url);
-    console.log(
-      "Copying message from " + source.chatId + " #" + source.messageId +
-      " for version " + version.id + " (" + movieTitle + ")"
-    );
-    return bot.copyMessage(chatId, source.chatId, source.messageId, fileOptions);
   }
-
-  throw new Error("Missing or invalid viewing_url on version " + version.id);
+  return { mediaList, validMsgIds, fileCount: files.length };
 }
 
-// Send the selected movie version along with clean 10 mins warning message.
-function sendMovieVersion(chatId, versionId) {
-  var cleanId = String(versionId || "").trim();
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cleanId)) {
-    return bot.sendMessage(
-      chatId,
-      "Invalid movie link. Please open the quality button on JJ Movies again."
-    );
+function scoreCandidate(cand, movieTitleNorm, movieYear, versionQuality) {
+  let score = 0;
+  if (!cand.normText.includes(movieTitleNorm)) return -1;
+  score += 50;
+  if (movieYear && cand.normText.includes(String(movieYear))) score += 20;
+
+  const vRes = extractRes(versionQuality);
+  if (vRes && cand.res === vRes) score += 30;
+  else if (vRes && cand.res && cand.res !== vRes) score -= 20;
+
+  const vHevc = /hevc|x265|h\.?265/i.test(versionQuality);
+  if (vHevc === cand.isHevc) score += 10;
+
+  const vSizeMB = parseSizeMBFromText(versionQuality);
+  if (vSizeMB && cand.sizeMB) {
+    const diffRatio = Math.abs(cand.sizeMB - vSizeMB) / Math.max(vSizeMB, 1);
+    if (diffRatio <= 0.12) score += 40;
+    else if (diffRatio <= 0.25) score += 20;
+    else if (diffRatio > 0.5) score -= 15;
   }
-
-  var versionPath =
-    "/rest/v1/movie_versions?select=id,movie_id,quality,audio_language,viewing_url" +
-    "&id=eq." + encodeURIComponent(cleanId) +
-    "&limit=1";
-
-  return supabaseGet(versionPath)
-    .then(function (versions) {
-      if (!versions || !versions.length) {
-        throw new Error("Movie version not found for id=" + cleanId);
-      }
-
-      var version = versions[0];
-
-      var moviePath =
-        "/rest/v1/movies?select=id,title,is_published" +
-        "&id=eq." + encodeURIComponent(version.movie_id) +
-        "&is_published=eq.true&limit=1";
-
-      return supabaseGet(moviePath).then(function (movieRows) {
-        if (!movieRows || !movieRows.length) {
-          throw new Error("Movie not found or unpublished for movie_id=" + version.movie_id);
-        }
-
-        return deliverMediaMessage(chatId, version, movieRows[0].title).then(function (copiedMessage) {
-          console.log(
-            "File delivered. Message ID: " +
-            copiedMessage.message_id
-          );
-
-          var warningText =
-            "⚠️ This file will be deleted from this chat in 10 minutes.\n\n" +
-            "Please save or forward it before the time expires!";
-
-          return bot.sendMessage(
-            chatId,
-            warningText
-          ).then(function (warningMessage) {
-            scheduleMessageDeletion(
-              chatId,
-              copiedMessage.message_id,
-              "Delivered file"
-            );
-
-            scheduleMessageDeletion(
-              chatId,
-              warningMessage.message_id,
-              "Warning message"
-            );
-
-            return copiedMessage;
-          }).catch(function (error) {
-            console.error("Warning message failed:", error.message);
-
-            scheduleMessageDeletion(
-              chatId,
-              copiedMessage.message_id,
-              "Delivered file"
-            );
-
-            return copiedMessage;
-          });
-        });
-      });
-    })
-    .catch(function (error) {
-      console.error("Movie delivery error:", error.message);
-
-      return bot.sendMessage(
-        chatId,
-        "Sorry bro, this file could not be delivered.\n" +
-        "Please try again later or contact the JJ Movies admin."
-      ).catch(function (sendError) {
-        console.error(
-          "Could not send error message:",
-          sendError.message
-        );
-      });
-    });
+  return score;
 }
 
-// /start command
-bot.onText(/\/start(?:\s+(.+))?/, function (msg, match) {
-  var chatId = msg.chat.id;
-  var payload = match && match[1] ? match[1].trim() : "";
+async function run() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    throw new Error("Render lo SUPABASE_URL or SUPABASE_KEY missing!");
+  }
 
-  var startOptions = {
-    disable_web_page_preview: false,
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
-        ]
-      ]
+  console.log("Scanning export/ HTML files...");
+  const { mediaList, validMsgIds, fileCount } = parseHtmlFiles();
+  console.log(`Found ${fileCount} HTML files, ${validMsgIds.size} messages, ${mediaList.length} movie files.`);
+
+  const movies = await supabaseReq("GET", "/rest/v1/movies?select=id,title,release_year&limit=5000");
+  const versions = await supabaseReq("GET", "/rest/v1/movie_versions?select=id,movie_id,quality,viewing_url&limit=10000");
+
+  const movieMap = new Map(movies.map((m) => [String(m.id), m]));
+  const usedMsgIdsPerMovie = new Map();
+
+  let alreadyValid = 0, updated = 0, notFound = 0;
+
+  for (const v of versions) {
+    const existingMatch = String(v.viewing_url || "").match(/\/c\/\d+\/(\d+)/);
+    const existingId = existingMatch ? Number(existingMatch[1]) : null;
+
+    if (existingId && validMsgIds.has(existingId)) {
+      alreadyValid++;
+      continue;
     }
-  };
 
-  if (!payload) {
-    return bot.sendMessage(
-      chatId,
-      "🎬 Welcome to JJ Movies!\n\n" +
-      "🍿 Open our website and choose a movie quality to receive the file.\n\n" +
-      "⚠️ Delivered files and their warning messages are scheduled " +
-      "for deletion after 10 minutes. Please save or forward your file before then.\n\n" +
-      "❤️ Enjoy your movie!",
-      startOptions
-    );
-  }
+    const movie = movieMap.get(String(v.movie_id));
+    if (!movie) { notFound++; continue; }
 
-  sendMovieVersion(chatId, payload);
-});
+    const titleNorm = norm(movie.title);
+    const usedSet = usedMsgIdsPerMovie.get(String(v.movie_id)) || new Set();
 
-// Help command
-bot.onText(/\/help/, function (msg) {
-  bot.sendMessage(
-    msg.chat.id,
-    "🎬 JJ Movies Bot\n\n" +
-    "/start - Start the bot\n" +
-    "/help - Show help\n\n" +
-    "Files and their warning messages are scheduled for deletion " +
-    "10 minutes after delivery. Please save or forward your file in time.",
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "🌐 Open JJ Movies Site", url: WEBSITE_URL }
-          ]
-        ]
+    let best = null, bestScore = -1;
+    for (const cand of mediaList) {
+      if (usedSet.has(cand.msgId)) continue;
+      const sc = scoreCandidate(cand, titleNorm, movie.release_year, v.quality);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = cand;
       }
     }
-  ).catch(function (error) {
-    console.error("Help message failed:", error.message);
-  });
-});
 
-// Telegram polling errors
-bot.on("polling_error", function (error) {
-  console.error("Telegram polling error:", error.message);
-});
+    if (!best || bestScore < 50) {
+      notFound++;
+      continue;
+    }
 
-console.log("JJ Files Bot started with 10 minutes deletion notice!");
+    usedSet.add(best.msgId);
+    usedMsgIdsPerMovie.set(String(v.movie_id), usedSet);
+    const newUrl = `https://t.me/c/${CHANNEL_ID}/${best.msgId}`;
+
+    await supabaseReq("PATCH", `/rest/v1/movie_versions?id=eq.${v.id}`, { viewing_url: newUrl });
+    console.log(`[UPDATED] Version ${v.id} (${movie.title} - ${v.quality}) -> #${best.msgId}`);
+    updated++;
+  }
+
+  console.log(`DONE! Already Valid: ${alreadyValid} | Updated: ${updated} | Not Matched: ${notFound}`);
+}
+
+run().catch((err) => {
+  console.error("FIX-LINKS ERROR:", err.message);
+  process.exit(0); // Bot start avvadaniki block cheyakunda
+});
