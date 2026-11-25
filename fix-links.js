@@ -5,8 +5,7 @@ const https = require("https");
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_KEY;
 const CHANNEL_ID = "3905680085";
-const EXPORT_DIR = path.join(__dirname, "export");
-
+const EXPORT_DIR = __dirname;
 function norm(str) {
   return String(str || "")
     .toLowerCase()
