@@ -6,6 +6,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_KEY;
 const CHANNEL_ID = "3905680085";
 const EXPORT_DIR = __dirname;
+
 function norm(str) {
   return String(str || "")
     .toLowerCase()
@@ -60,10 +61,25 @@ function supabaseReq(method, apiPath, bodyObj) {
   });
 }
 
+async function fetchAll(tablePath) {
+  let all = [];
+  let offset = 0;
+  const pageSize = 1000;
+  while (true) {
+    const sep = tablePath.includes("?") ? "&" : "?";
+    const rows = await supabaseReq("GET", `${tablePath}${sep}limit=${pageSize}&offset=${offset}`);
+    if (!rows || !rows.length) break;
+    all = all.concat(rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 function parseHtmlFiles() {
-  if (!fs.existsSync(EXPORT_DIR)) throw new Error("export/ folder kanipinchaledu!");
+  if (!fs.existsSync(EXPORT_DIR)) throw new Error("Export folder kanipinchaledu!");
   const files = fs.readdirSync(EXPORT_DIR).filter((f) => /^messages\d*\.html$/i.test(f));
-  if (!files.length) throw new Error("export/ folder lo messages.html files levu!");
+  if (!files.length) throw new Error("messages.html files levu!");
 
   const mediaList = [];
   const validMsgIds = new Set();
@@ -131,12 +147,13 @@ async function run() {
     throw new Error("Render lo SUPABASE_URL or SUPABASE_KEY missing!");
   }
 
-  console.log("Scanning export/ HTML files...");
+  console.log("Scanning HTML files...");
   const { mediaList, validMsgIds, fileCount } = parseHtmlFiles();
   console.log(`Found ${fileCount} HTML files, ${validMsgIds.size} messages, ${mediaList.length} movie files.`);
 
-  const movies = await supabaseReq("GET", "/rest/v1/movies?select=id,title,release_year&limit=5000");
-  const versions = await supabaseReq("GET", "/rest/v1/movie_versions?select=id,movie_id,quality,viewing_url&limit=10000");
+  const movies = await fetchAll("/rest/v1/movies?select=id,title,release_year&order=id.asc");
+  const versions = await fetchAll("/rest/v1/movie_versions?select=id,movie_id,quality,viewing_url&order=id.asc");
+  console.log(`Fetched ${movies.length} movies and ${versions.length} versions from Supabase.`);
 
   const movieMap = new Map(movies.map((m) => [String(m.id), m]));
   const usedMsgIdsPerMovie = new Map();
